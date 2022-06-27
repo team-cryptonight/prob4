@@ -1,0 +1,15 @@
+0 abandon
+224 bright
+248 business
+365 color
+958 jelly
+964 joy
+1033 license
+1114 mercy
+1156 mountain
+1293 payment
+1354 power
+1358 prefer
+1401 quality
+1798 this
+2047 zoo
