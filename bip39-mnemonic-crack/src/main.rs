@@ -4,6 +4,30 @@ use clap::Parser;
 use time::{format_description::well_known::Iso8601, OffsetDateTime};
 use tokio::{fs::File, io::AsyncWriteExt};
 
+macro_rules! async_writeln {
+    ($dst: expr) => {
+        {
+            AsyncWriteExt::write_all(&mut $dst, b"\n").await
+        }
+    };
+    ($dst: expr, $fmt: expr) => {
+        {
+            use std::io::Write;
+            let mut buf = Vec::<u8>::new();
+            writeln!(buf, $fmt)?;
+            AsyncWriteExt::write_all(&mut $dst, &buf).await
+        }
+    };
+    ($dst: expr, $fmt: expr, $($arg: tt)*) => {
+        {
+            use std::io::Write;
+            let mut buf = Vec::<u8>::new();
+            writeln!(buf, $fmt, $( $arg )*)?;
+            AsyncWriteExt::write_all(&mut $dst, &buf).await
+        }
+    };
+}
+
 #[derive(Parser, Debug)]
 #[clap(version)]
 struct Args {
@@ -29,26 +53,16 @@ async fn main() -> io::Result<()> {
     let args = Args::parse();
     let mut output_file = File::create(args.output_file).await?;
     let started_on = OffsetDateTime::now_utc();
-    {
-        let mut buf = Vec::<u8>::new();
-        let start_msg = format!(
-            "Started on: {}",
-            started_on.format(&Iso8601::DEFAULT).unwrap()
-        );
-        println!("{}", start_msg);
-        writeln!(buf, "{}", start_msg)?;
-        AsyncWriteExt::write_all(&mut output_file, &buf).await?;
-    }
+    async_writeln!(
+        output_file,
+        "Started on: {}",
+        started_on.format(&Iso8601::DEFAULT).unwrap()
+    )?;
     let finished_on = OffsetDateTime::now_utc();
-    {
-        let mut buf = Vec::<u8>::new();
-        let finish_msg = format!(
-            "Finished on: {}",
-            finished_on.format(&Iso8601::DEFAULT).unwrap()
-        );
-        println!("{}", finish_msg);
-        writeln!(buf, "{}", finish_msg)?;
-        AsyncWriteExt::write_all(&mut output_file, &buf).await?;
-    }
+    async_writeln!(
+        output_file,
+        "Finished on: {}",
+        finished_on.format(&Iso8601::DEFAULT).unwrap()
+    )?;
     Ok(())
 }
