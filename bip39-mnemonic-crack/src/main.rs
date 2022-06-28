@@ -4,16 +4,17 @@ use std::{
     io::{self, BufRead, BufReader, Write},
 };
 
+use bit_utils::bit_utils::{low_nbits, perm_to_bytearray};
 use clap::Parser;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
-use pbkdf2::pbkdf2;
-use sha2::{Digest, Sha256, Sha512};
+use sha2::Sha512;
 use time::{format_description::well_known::Iso8601, OffsetDateTime};
 use tokio::{fs::File as TokioFile, io::AsyncWriteExt};
 
+pub mod bip39_utils;
 pub mod bit_utils;
-use crate::bit_utils::bit_utils::{low_nbits, perm_to_bytearray};
+use bip39_utils::bip39_utils::{indices_to_sentence, mnemonic_to_seed, sentence_checksum};
 
 macro_rules! async_writeln {
     ($dst: expr) => {
@@ -140,22 +141,15 @@ async fn main() -> io::Result<()> {
                 end = true;
                 break;
             }
-            let mut hasher = Sha256::new();
+
             let bytearray = perm_to_bytearray(&perm);
-            hasher.update(bytearray);
-            let digest = hasher.finalize();
-            if (digest[0] >> 4) != low_nbits(perm[11], 4) as u8 {
+            if sentence_checksum(&bytearray) != low_nbits(perm[11], 4) as u8 {
                 continue;
             }
 
-            let sentence = perm.into_iter().map(|x| dictionary[&x].clone()).join(" ");
-            let mut derived_key: Vec<u8> = vec![];
-            pbkdf2::<Hmac<Sha512>>(
-                sentence.as_bytes(),
-                "mnemonic".as_bytes(),
-                2048,
-                derived_key.as_mut(),
-            );
+            let perm_arr: [u32; 12] = perm.try_into().unwrap();
+            let sentence = indices_to_sentence(&perm_arr, &dictionary);
+            let derived_key = mnemonic_to_seed(sentence.as_str());
             let mut mac = Hmac::<Sha512>::new_from_slice(b"Bitcoin seed").unwrap();
             mac.update(derived_key.as_ref());
             let code = mac.finalize().into_bytes();
