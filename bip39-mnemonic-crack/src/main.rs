@@ -1,12 +1,15 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{self, BufRead, BufReader, Write},
+    io::{self, stdout, BufRead, BufReader, Write},
+    sync::mpsc::{self, Sender},
+    thread,
 };
 
 use bip39_utils::bip39_utils::{indices_to_sentence, mnemonic_to_seed, sentence_checksum};
 use bit_utils::bit_utils::{low_nbits, perm_to_bytearray};
 use clap::Parser;
+use crossterm::{cursor, ExecutableCommand};
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use sha2::Sha512;
@@ -61,9 +64,66 @@ struct Args {
     #[clap(short, long, value_parser, default_value = "result.txt")]
     output_file: String,
 
-    /// Maximum tries count. (all permutations are tried if set to -1)
+    /// Maximum tries count (all permutations are tried if set to -1)
     #[clap(long, value_parser, default_value_t = -1)]
     max_tries: i64,
+
+    /// Show progress
+    #[clap(short, long, action)]
+    verbose: bool,
+}
+
+#[derive(Debug)]
+enum ThreadStatus {
+    Trying(String),
+    Matched(String),
+    Finished(i64),
+}
+
+fn crack_loop(
+    dictionary: HashMap<u32, String>,
+    indices: Vec<Vec<u32>>,
+    partial_digest: Vec<u8>,
+    thread_id: u32,
+    tx: Sender<(u32, ThreadStatus)>,
+    verbose_output: bool,
+    max_tries: i64,
+) {
+    let mut hash_count: i64 = 0;
+    let mut end = false;
+    for tuple in indices {
+        for perm in tuple.into_iter().permutations(12) {
+            hash_count += 1;
+            if hash_count == max_tries + 1 {
+                end = true;
+                break;
+            }
+
+            let perm_arr: [u32; 12] = perm.try_into().unwrap();
+            let bytearray = perm_to_bytearray(&perm_arr);
+            if sentence_checksum(&bytearray) != low_nbits(perm_arr[11], 4) as u8 {
+                continue;
+            }
+            let sentence = indices_to_sentence(&perm_arr, &dictionary);
+            if verbose_output {
+                tx.send((thread_id, ThreadStatus::Trying(sentence.clone())))
+                    .unwrap();
+            }
+            let derived_key = mnemonic_to_seed(sentence.as_str());
+            let mut mac = Hmac::<Sha512>::new_from_slice(b"Bitcoin seed").unwrap();
+            mac.update(derived_key.as_ref());
+            let code = mac.finalize().into_bytes();
+            if code[32..] == partial_digest[..] {
+                tx.send((thread_id, ThreadStatus::Matched(sentence)))
+                    .unwrap();
+            }
+        }
+        if end {
+            break;
+        }
+    }
+    tx.send((thread_id, ThreadStatus::Finished(hash_count)))
+        .unwrap();
 }
 
 #[tokio::main]
@@ -131,33 +191,79 @@ async fn main() -> io::Result<()> {
         started_on.format(&Iso8601::DEFAULT).unwrap()
     )?;
 
-    let mut hash_count: i64 = 0;
-    let mut end = false;
-    for tuple in indices {
-        for perm in tuple.into_iter().permutations(12) {
-            hash_count += 1;
-            if hash_count == args.max_tries + 1 {
-                end = true;
-                break;
-            }
+    let spawned_thread_count = args.thread_count.clamp(1, indices.len() as u32);
+    let (tx, rx) = mpsc::channel();
+    println!("Spawning {} threads...", spawned_thread_count);
+    for thread_id in 0..spawned_thread_count {
+        let dictionary_cloned = dictionary.clone();
+        let indices_cloned = indices[thread_id as usize..]
+            .into_iter()
+            .step_by(spawned_thread_count as usize)
+            .map(|v| v.clone())
+            .collect::<Vec<_>>();
+        let partial_digest_cloned = partial_digest.clone();
+        let tx_cloned = tx.clone();
 
-            let perm_arr: [u32; 12] = perm.try_into().unwrap();
-            let bytearray = perm_to_bytearray(&perm_arr);
-            if sentence_checksum(&bytearray) != low_nbits(perm_arr[11], 4) as u8 {
-                continue;
+        thread::spawn(move || {
+            crack_loop(
+                dictionary_cloned,
+                indices_cloned,
+                partial_digest_cloned,
+                thread_id,
+                tx_cloned,
+                args.verbose,
+                args.max_tries,
+            );
+        });
+    }
+
+    let mut hash_count = 0;
+    let mut finished_threads = 0;
+    for _ in 1..spawned_thread_count {
+        println!();
+    }
+    stdout()
+        .execute(cursor::MoveToPreviousLine(spawned_thread_count as u16 - 1))
+        .unwrap()
+        .execute(cursor::SavePosition)
+        .unwrap();
+    stdout().flush().unwrap();
+    for received in rx {
+        match received.1 {
+            ThreadStatus::Trying(x) => {
+                stdout()
+                    .execute(cursor::MoveToNextLine(received.0 as u16))
+                    .unwrap();
+                print!("[Thread {}] Trying: {}", received.0, x);
+                stdout().execute(cursor::RestorePosition).unwrap();
             }
-            let sentence = indices_to_sentence(&perm_arr, &dictionary);
-            let derived_key = mnemonic_to_seed(sentence.as_str());
-            let mut mac = Hmac::<Sha512>::new_from_slice(b"Bitcoin seed").unwrap();
-            mac.update(derived_key.as_ref());
-            let code = mac.finalize().into_bytes();
-            if code[32..] == partial_digest[..] {
-                async_writeln!(output_file, "{}", sentence)?;
+            ThreadStatus::Matched(x) => {
+                stdout()
+                    .execute(cursor::MoveToNextLine(received.0 as u16))
+                    .unwrap();
+                print!("[Thread {}] Matched: {}", received.0, x);
+                async_writeln!(output_file, "Match: {}", x)?;
+                stdout().execute(cursor::RestorePosition).unwrap();
+            }
+            ThreadStatus::Finished(x) => {
+                stdout()
+                    .execute(cursor::MoveToNextLine(received.0 as u16))
+                    .unwrap();
+                print!("[Thread {}] Finished!", received.0);
+                stdout().execute(cursor::RestorePosition).unwrap();
+                hash_count += x;
+                finished_threads += 1;
+                if finished_threads == spawned_thread_count {
+                    if args.verbose {
+                        stdout()
+                            .execute(cursor::MoveToNextLine(spawned_thread_count as u16))
+                            .unwrap();
+                    }
+                    break;
+                }
             }
         }
-        if end {
-            break;
-        }
+        stdout().flush().unwrap();
     }
 
     let finished_on = OffsetDateTime::now_utc();
