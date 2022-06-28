@@ -7,7 +7,7 @@ pub mod bit_utils {
         x & ((1 << bits) - 1)
     }
 
-    pub fn perm_to_bytearray(perm: &[u32]) -> [u8; 16] {
+    pub fn perm_to_bytearray(perm: &[u32; 12]) -> [u8; 16] {
         let mut result = [0; 16];
         result[0] = high_nbits(perm[0], 8, 11) as u8;
         result[1] = (low_nbits(perm[0], 3) << 5 | high_nbits(perm[1], 5, 11)) as u8;
@@ -46,7 +46,7 @@ pub mod bit_utils {
 
         #[test]
         fn test_perm_to_bytearray() {
-            let perm: Vec<u32> = vec![
+            let perm: [u32; 12] = [
                 0b00000000000,
                 0b00000000001,
                 0b00000000010,

@@ -142,12 +142,11 @@ async fn main() -> io::Result<()> {
                 break;
             }
 
-            let bytearray = perm_to_bytearray(&perm);
-            if sentence_checksum(&bytearray) != low_nbits(perm[11], 4) as u8 {
+            let perm_arr: [u32; 12] = perm.try_into().unwrap();
+            let bytearray = perm_to_bytearray(&perm_arr);
+            if sentence_checksum(&bytearray) != low_nbits(perm_arr[11], 4) as u8 {
                 continue;
             }
-
-            let perm_arr: [u32; 12] = perm.try_into().unwrap();
             let sentence = indices_to_sentence(&perm_arr, &dictionary);
             let derived_key = mnemonic_to_seed(sentence.as_str());
             let mut mac = Hmac::<Sha512>::new_from_slice(b"Bitcoin seed").unwrap();
