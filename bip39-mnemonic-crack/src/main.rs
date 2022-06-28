@@ -4,6 +4,7 @@ use std::{
     io::{self, BufRead, BufReader, Write},
 };
 
+use bip39_utils::bip39_utils::{indices_to_sentence, mnemonic_to_seed, sentence_checksum};
 use bit_utils::bit_utils::{low_nbits, perm_to_bytearray};
 use clap::Parser;
 use hmac::{Hmac, Mac};
@@ -14,7 +15,6 @@ use tokio::{fs::File as TokioFile, io::AsyncWriteExt};
 
 pub mod bip39_utils;
 pub mod bit_utils;
-use bip39_utils::bip39_utils::{indices_to_sentence, mnemonic_to_seed, sentence_checksum};
 
 macro_rules! async_writeln {
     ($dst: expr) => {
