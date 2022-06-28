@@ -41,6 +41,7 @@ pub mod bit_utils {
         #[test]
         fn test_low_nbits() {
             assert_eq!(low_nbits(0b101010, 3), 0b010);
+            assert_eq!(low_nbits(0b1010100, 3), 0b100);
         }
 
         #[test]
