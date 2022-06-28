@@ -137,7 +137,6 @@ async fn main() -> io::Result<()> {
         for perm in tuple.into_iter().permutations(12) {
             hash_count += 1;
             if hash_count == args.max_tries + 1 {
-                println!("end");
                 end = true;
                 break;
             }
